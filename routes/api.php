@@ -84,6 +84,17 @@ Route::delete('/emails/{id}', function ($id) {
     return response()->json(['message' => 'Nicht gefunden'], 404);
 });
 
+// E-Mail in anderen Ordner verschieben
+Route::patch('/emails/{id}/move', function (Request $request, $id) {
+    $request->validate(['folder' => 'required|string']);
+    $email = Email::find($id);
+    if ($email) {
+        $email->update(['folder' => $request->folder]);
+        return response()->json(['message' => 'Verschoben']);
+    }
+    return response()->json(['message' => 'Nicht gefunden'], 404);
+});
+
 // E-Mail als gelesen markieren
 Route::patch('/emails/{id}/read', function ($id) {
     $email = Email::find($id);
