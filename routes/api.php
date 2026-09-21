@@ -9,34 +9,66 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
-// Alle E-Mails abrufen (neueste zuerst)
-Route::get('/emails', function () {
-    // Echte Daten aus der Datenbank laden und in das von Flutter erwartete Format mappen
-    return Email::orderBy('created_at', 'desc')->get()->map(function ($email) {
+// Alle E-Mails abrufen (neueste zuerst, mit Filter für Ordner und Suche)
+Route::get('/emails', function (Request $request) {
+    $query = Email::query();
+    
+    // Ordner-Filter
+    $folder = $request->query('folder', 'inbox');
+    $query->where('folder', $folder);
+    
+    // Such-Filter
+    if ($request->has('search') && !empty($request->query('search'))) {
+        $search = $request->query('search');
+        $query->where(function($q) use ($search) {
+            $q->where('subject', 'like', "%{$search}%")
+              ->orWhere('sender', 'like', "%{$search}%")
+              ->orWhere('body', 'like', "%{$search}%");
+        });
+    }
+
+    return $query->orderBy('created_at', 'desc')->get()->map(function ($email) {
         return [
             'id' => $email->id,
             'sender' => $email->sender,
             'subject' => $email->subject,
             'body' => $email->body,
             'isRead' => (bool) $email->is_read,
+            'folder' => $email->folder,
+            'attachments' => $email->attachments ?? [],
             'date' => $email->created_at->toIso8601String(),
         ];
     });
 });
 
-// Neue E-Mail anlegen (wird über Postman oder App genutzt)
+// Neue E-Mail anlegen (inklusive Datei-Anhänge)
 Route::post('/emails', function (Request $request) {
     $request->validate([
         'sender' => 'required|email',
         'subject' => 'required|string|max:255',
         'body' => 'required|string',
+        'attachments.*' => 'file|max:10240', // Max 10MB pro Datei
     ]);
+
+    $attachmentPaths = [];
+    if ($request->hasFile('attachments')) {
+        foreach ($request->file('attachments') as $file) {
+            // Speichert die Datei in storage/app/public/attachments
+            $path = $file->store('attachments', 'public');
+            $attachmentPaths[] = [
+                'name' => $file->getClientOriginalName(),
+                'path' => $path
+            ];
+        }
+    }
 
     $email = Email::create([
         'sender' => $request->sender,
         'subject' => $request->subject,
         'body' => $request->body,
-        'is_read' => false,
+        'is_read' => true,
+        'folder' => 'sent', // Abgesendete Mails kommen in "sent"
+        'attachments' => $attachmentPaths,
     ]);
 
     return response()->json($email, 201);
