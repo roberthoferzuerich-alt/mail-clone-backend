@@ -41,3 +41,63 @@ Route::post('/emails', function (Request $request) {
 
     return response()->json($email, 201);
 });
+
+// E-Mail löschen
+Route::delete('/emails/{id}', function ($id) {
+    $email = Email::find($id);
+    if ($email) {
+        $email->delete();
+        return response()->json(['message' => 'Gelöscht']);
+    }
+    return response()->json(['message' => 'Nicht gefunden'], 404);
+});
+
+// E-Mail als gelesen markieren
+Route::patch('/emails/{id}/read', function ($id) {
+    $email = Email::find($id);
+    if ($email) {
+        $email->update(['is_read' => true]);
+        return response()->json(['message' => 'Als gelesen markiert']);
+    }
+    return response()->json(['message' => 'Nicht gefunden'], 404);
+});
+
+// Echte E-Mails über IMAP abrufen
+Route::get('/imap/sync', function () {
+    try {
+        $client = \Webklex\IMAP\Facades\Client::account('default');
+        $client->connect();
+
+        $folder = $client->getFolder('INBOX');
+        // Die 5 neuesten E-Mails holen
+        $messages = $folder->query()->limit(5)->get();
+
+        $count = 0;
+        foreach($messages as $message) {
+            $subject = $message->getSubject()[0] ?? 'Kein Betreff';
+            $body = $message->getTextBody() ?? '';
+            if (empty(trim($body))) {
+                $body = $message->getHTMLBody() ?? 'Kein Inhalt';
+            }
+            
+            $from = $message->getFrom()[0]->mail ?? 'unknown@example.com';
+            
+            // Verhindern, dass Mails doppelt importiert werden
+            $exists = Email::where('subject', $subject)->where('sender', $from)->exists();
+            
+            if (!$exists) {
+                Email::create([
+                    'sender' => $from,
+                    'subject' => $subject,
+                    'body' => mb_substr(strip_tags($body), 0, 500), // Als reinen Text speichern
+                    'is_read' => false,
+                ]);
+                $count++;
+            }
+        }
+        
+        return response()->json(['message' => "$count neue E-Mails importiert!"]);
+    } catch (\Exception $e) {
+        return response()->json(['error' => $e->getMessage()], 500);
+    }
+});
