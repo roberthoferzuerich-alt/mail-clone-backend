@@ -16,6 +16,26 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::post('/logout', [AuthController::class, 'logout']);
 
+    // Mail Accounts
+    Route::get('/mail-accounts', function (Request $request) {
+        $accounts = $request->user()->mailAccounts()->select(['id', 'email', 'imap_host', 'smtp_host'])->get();
+        return response()->json($accounts);
+    });
+
+    Route::post('/mail-accounts', function (Request $request) {
+        $validated = $request->validate([
+            'email' => 'required|email',
+            'password' => 'required|string',
+            'imap_host' => 'required|string',
+            'imap_port' => 'required|integer',
+            'smtp_host' => 'required|string',
+            'smtp_port' => 'required|integer',
+        ]);
+        
+        $account = $request->user()->mailAccounts()->create($validated);
+        return response()->json(['message' => 'Account created', 'id' => $account->id], 201);
+    });
+
     // E-Mail-Zähler für Ordner abrufen (Ungelesen)
     Route::get('/emails/counts', function (Request $request) {
         $counts = Email::selectRaw('folder, COUNT(*) as count')

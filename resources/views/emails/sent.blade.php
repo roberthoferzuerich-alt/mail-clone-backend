@@ -7,3 +7,4 @@
     {!! \Illuminate\Support\Str::markdown($emailBody) !!}
 </body>
 </html>
+

@@ -30,4 +30,9 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
+
+    public function mailAccounts()
+    {
+        return $this->hasMany(MailAccount::class);
+    }
 }
