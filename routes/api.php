@@ -18,7 +18,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Mail Accounts
     Route::get('/mail-accounts', function (Request $request) {
-        $accounts = $request->user()->mailAccounts()->select(['id', 'email', 'imap_host', 'smtp_host'])->get();
+        $accounts = $request->user()->mailAccounts()->select(['id', 'email', 'imap_host', 'imap_port', 'smtp_host', 'smtp_port'])->get();
         return response()->json($accounts);
     });
 
@@ -35,6 +35,36 @@ Route::middleware('auth:sanctum')->group(function () {
         $account = $request->user()->mailAccounts()->create($validated);
         return response()->json(['message' => 'Account created', 'id' => $account->id], 201);
     });
+
+Route::put('/mail-accounts/{id}', function (Request $request, $id) {
+        $account = $request->user()->mailAccounts()->find($id);
+        if (!$account) return response()->json(['message' => 'Not found'], 404);
+
+        $validated = $request->validate([
+            'email' => 'required|email',
+            'imap_host' => 'required|string',
+            'imap_port' => 'required|integer',
+            'smtp_host' => 'required|string',
+            'smtp_port' => 'required|integer',
+        ]);
+
+        if ($request->filled('password')) {
+            $validated['password'] = $request->password;
+        }
+
+        $account->update($validated);
+        return response()->json(['message' => 'Account updated']);
+    });
+
+    Route::delete('/mail-accounts/{id}', function (Request $request, $id) {
+        $account = $request->user()->mailAccounts()->find($id);
+        if (!$account) return response()->json(['message' => 'Not found'], 404);
+
+        $account->delete();
+        return response()->json(['message' => 'Account deleted']);
+    });
+
+    // E-Mail-Zähler
 
     // E-Mail-Zähler für Ordner abrufen (Ungelesen)
     Route::get('/emails/counts', function (Request $request) {
@@ -106,10 +136,35 @@ Route::middleware('auth:sanctum')->group(function () {
             'attachments' => $attachmentPaths,
         ]);
 
+        // Dynamische SMTP-Konfiguration laden
+        $account = $request->user()->mailAccounts()->first();
+        if ($account) {
+            config([
+                'mail.default' => 'smtp',
+                'mail.mailers.smtp.host' => $account->smtp_host,
+                'mail.mailers.smtp.port' => $account->smtp_port,
+                'mail.mailers.smtp.encryption' => $account->smtp_port == 465 ? 'ssl' : 'tls',
+                'mail.mailers.smtp.username' => $account->email,
+                'mail.mailers.smtp.password' => $account->password,
+                'mail.from.address' => $account->email,
+                'mail.from.name' => $request->user()->name,
+            ]);
+            
+            // Wichtig: Wir müssen Laravel zwingen, die Konfiguration neu zu laden
+            app()->singleton('mail.manager', function ($app) {
+                return new \Illuminate\Mail\MailManager($app);
+            });
+            \Illuminate\Support\Facades\Mail::clearResolvedInstance('mail.manager');
+        }
+
         try {
-            Mail::to($request->sender)->send(new SentEmail($request->subject, $request->body, $attachmentPaths));
+            if (!$account) {
+                throw new \Exception("Kein E-Mail-Konto hinterlegt.");
+            }
+            \Illuminate\Support\Facades\Mail::to($request->sender)->send(new SentEmail($request->subject, $request->body, $attachmentPaths));
         } catch (\Exception $e) {
             \Log::error('Mail sending failed: ' . $e->getMessage());
+            return response()->json(['error' => 'Mail sending failed: ' . $e->getMessage()], 500);
         }
 
         return response()->json($email, 201);
