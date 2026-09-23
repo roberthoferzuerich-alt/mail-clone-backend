@@ -68,9 +68,15 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
 
     // E-Mail-Zähler für Ordner abrufen (Ungelesen)
     Route::get('/emails/counts', function (Request $request) {
-        $counts = Email::selectRaw('folder, COUNT(*) as count')
-            ->where('is_read', false)
-            ->groupBy('folder')
+        $accountId = $request->query('account_id');
+        $query = Email::selectRaw('folder, COUNT(*) as count')->where('is_read', false);
+        if ($accountId) {
+            $query->where('mail_account_id', $accountId);
+        } else {
+            $query->whereNull('mail_account_id');
+        }
+        
+        $counts = $query->groupBy('folder')
             ->pluck('count', 'folder')
             ->toArray();
         
@@ -80,6 +86,13 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
     // Alle E-Mails abrufen (neueste zuerst, mit Filter für Ordner und Suche)
     Route::get('/emails', function (Request $request) {
         $query = Email::query();
+        
+        $accountId = $request->query('account_id');
+        if ($accountId) {
+            $query->where('mail_account_id', $accountId);
+        } else {
+            $query->whereNull('mail_account_id');
+        }
         
         $folder = $request->query('folder', 'inbox');
         $query->where('folder', $folder);
@@ -110,6 +123,7 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
     // Neue E-Mail anlegen (inklusive Datei-Anhänge)
     Route::post('/emails', function (Request $request) {
         $request->validate([
+            'account_id' => 'nullable|integer',
             'sender' => 'required|email',
             'subject' => 'required|string|max:255',
             'body' => 'required|string',
@@ -127,7 +141,11 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
             }
         }
 
+        $accountId = $request->input('account_id');
+        $account = $accountId ? $request->user()->mailAccounts()->find($accountId) : $request->user()->mailAccounts()->first();
+
         $email = Email::create([
+            'mail_account_id' => $account ? $account->id : null,
             'sender' => $request->sender,
             'subject' => $request->subject,
             'body' => $request->body,
@@ -137,7 +155,6 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
         ]);
 
         // Dynamische SMTP-Konfiguration laden
-        $account = $request->user()->mailAccounts()->first();
         if ($account) {
             config([
                 'mail.default' => 'smtp',
@@ -202,13 +219,35 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
     });
 
     // Echte E-Mails über IMAP abrufen
-    Route::get('/imap/sync', function () {
+    Route::get('/imap/sync', function (\Illuminate\Http\Request $request) {
+        $accountId = $request->query('account_id');
+        if (!$accountId) {
+            return response()->json(['error' => 'No account_id provided'], 400);
+        }
+
+        $account = $request->user()->mailAccounts()->find($accountId);
+        if (!$account) {
+            return response()->json(['error' => 'Account not found'], 404);
+        }
+
         try {
+            config([
+                'imap.accounts.default.host' => $account->imap_host,
+                'imap.accounts.default.port' => $account->imap_port,
+                'imap.accounts.default.encryption' => $account->imap_port == 993 ? 'ssl' : 'tls',
+                'imap.accounts.default.validate_cert' => false,
+                'imap.accounts.default.username' => $account->email,
+                'imap.accounts.default.password' => $account->password,
+                'imap.accounts.default.protocol' => 'imap',
+            ]);
+
+            // Clear cache and connect
+            \Webklex\IMAP\Facades\Client::purge('default');
             $client = \Webklex\IMAP\Facades\Client::account('default');
             $client->connect();
 
             $folder = $client->getFolder('INBOX');
-            $messages = $folder->query()->limit(5)->get();
+            $messages = $folder->query()->limit(10)->get();
 
             $count = 0;
             foreach($messages as $message) {
@@ -220,10 +259,14 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
                 
                 $from = $message->getFrom()[0]->mail ?? 'unknown@example.com';
                 
-                $exists = Email::where('subject', $subject)->where('sender', $from)->exists();
+                $exists = \App\Models\Email::where('mail_account_id', $account->id)
+                               ->where('subject', $subject)
+                               ->where('sender', $from)
+                               ->exists();
                 
                 if (!$exists) {
-                    Email::create([
+                    \App\Models\Email::create([
+                        'mail_account_id' => $account->id,
                         'sender' => $from,
                         'subject' => $subject,
                         'body' => mb_substr(strip_tags($body), 0, 500),
@@ -236,6 +279,7 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
             
             return response()->json(['message' => "$count neue E-Mails importiert!"]);
         } catch (\Exception $e) {
+            \Log::error('IMAP Error: ' . $e->getMessage());
             return response()->json(['error' => $e->getMessage()], 500);
         }
     });
