@@ -265,7 +265,7 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
                         'mail_account_id' => $account->id,
                         'sender' => $from,
                         'subject' => $subject,
-                        'body' => mb_substr(strip_tags($body), 0, 500),
+                        'body' => $body,
                         'is_read' => false,
                         'folder' => 'inbox',
                     ]);
