@@ -243,7 +243,7 @@ Route::put('/mail-accounts/{id}', function (Request $request, $id) {
             $client->connect();
 
             $folder = $client->getFolder('INBOX');
-            $messages = $folder->query()->limit(10)->get();
+            $messages = $folder->messages()->all()->limit(10)->get();
 
             $count = 0;
             foreach($messages as $message) {
